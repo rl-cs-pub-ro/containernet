@@ -763,7 +763,8 @@ class Docker ( Host ):
                      'devices': [],
                      'cap_add': ['net_admin'],  # we need this to allow mininet network setup
                      'storage_opt': None,
-                     'sysctls': {}
+                     'sysctls': {},
+                     'persist': False,
                      }
         defaults.update( kwargs )
 
@@ -799,6 +800,7 @@ class Docker ( Host ):
         # self.dcli = docker.APIClient(base_url='unix://var/run/docker.sock')
         self.d_client = docker.from_env()
         self.dcli = self.d_client.api
+        self.persist = defaults['persist']
 
         _id = None
         if build_params.get("path", None):
@@ -821,49 +823,56 @@ class Docker ( Host ):
         debug("dcmd: %s\n" % str(self.dcmd))
         info("%s: kwargs %s\n" % (name, str(kwargs)))
 
-        # creats host config for container
-        # see: https://docker-py.readthedocs.io/en/stable/api.html#docker.api.container.ContainerApiMixin.create_host_config
-        hc = self.dcli.create_host_config(
-            network_mode=self.network_mode,
-            privileged=False,  # no longer need privileged, using net_admin capability instead
-            binds=self.volumes,
-            tmpfs=self.tmpfs,
-            publish_all_ports=self.publish_all_ports,
-            port_bindings=self.port_bindings,
-            mem_limit=self.resources.get('mem_limit'),
-            cpuset_cpus=self.resources.get('cpuset_cpus'),
-            dns=self.dns,
-            ipc_mode=self.ipc_mode,  # string
-            devices=self.devices,  # see docker-py docu
-            cap_add=self.cap_add,  # see docker-py docu
-            sysctls=self.sysctls,   # see docker-py docu
-            storage_opt=self.storage_opt,
-        )
+        container_name = "%s.%s" % (self.dnameprefix, name)
+        existing_containers = self.dcli.containers(all=True, filters={
+                "name": container_name, 
+            })
 
         if kwargs.get("rm", False):
-            container_list = self.dcli.containers(all=True)
-            for container in container_list:
-                for container_name in container.get("Names", []):
-                    if "%s.%s" % (self.dnameprefix, name) in container_name:
-                        self.dcli.remove_container(container="%s.%s" % (self.dnameprefix, name), force=True)
-                        break
+            for container in existing_containers:
+                for name in container.get("Names", []):
+                    self.dcli.remove_container(container=container_name, force=True)
+                    break
+            existing_containers = []
 
-        # create new docker container
-        self.dc = self.dcli.create_container(
-            name="%s.%s" % (self.dnameprefix, name),
-            image=self.dimage,
-            command=self.dcmd,
-            entrypoint=list(),  # overwrite (will be executed manually at the end)
-            stdin_open=True,  # keep container open
-            tty=True,  # allocate pseudo tty
-            environment=self.environment,
-            #network_disabled=True,  # docker stats breaks if we disable the default network
-            host_config=hc,
-            ports=defaults['ports'],
-            labels=['com.containernet'],
-            volumes=[self._get_volume_mount_name(v) for v in self.volumes if self._get_volume_mount_name(v) is not None],
-            hostname=name
-        )
+        if not existing_containers:
+            # creats host config for container
+            # see: https://docker-py.readthedocs.io/en/stable/api.html#docker.api.container.ContainerApiMixin.create_host_config
+            hc = self.dcli.create_host_config(
+                network_mode=self.network_mode,
+                privileged=False,  # no longer need privileged, using net_admin capability instead
+                binds=self.volumes,
+                tmpfs=self.tmpfs,
+                publish_all_ports=self.publish_all_ports,
+                port_bindings=self.port_bindings,
+                mem_limit=self.resources.get('mem_limit'),
+                cpuset_cpus=self.resources.get('cpuset_cpus'),
+                dns=self.dns,
+                ipc_mode=self.ipc_mode,  # string
+                devices=self.devices,  # see docker-py docu
+                cap_add=self.cap_add,  # see docker-py docu
+                sysctls=self.sysctls,   # see docker-py docu
+                storage_opt=self.storage_opt,
+            )
+
+            # create new docker container
+            self.dc = self.dcli.create_container(
+                name=container_name,
+                image=self.dimage,
+                command=self.dcmd,
+                entrypoint=list(),  # overwrite (will be executed manually at the end)
+                stdin_open=True,  # keep container open
+                tty=True,  # allocate pseudo tty
+                environment=self.environment,
+                #network_disabled=True,  # docker stats breaks if we disable the default network
+                host_config=hc,
+                ports=defaults['ports'],
+                labels=['com.containernet'],
+                volumes=[self._get_volume_mount_name(v) for v in self.volumes if self._get_volume_mount_name(v) is not None],
+                hostname=name
+            )
+        else:
+            self.dc = existing_containers[0]
 
         # start the container
         self.dcli.start(self.dc)
@@ -1006,7 +1015,9 @@ class Docker ( Host ):
         if not self._is_container_running():
             return
         try:
-            self.dcli.remove_container(self.dc, force=True, v=True)
+            self.dcli.stop(self.dc)
+            if not self.persist:
+                self.dcli.remove_container(self.dc, force=True, v=True)
         except docker.errors.APIError as e:
             warn("Warning: API error during container removal.\n")
 
