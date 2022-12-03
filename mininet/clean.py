@@ -126,8 +126,8 @@ class Cleanup( object ):
             callback()
 
         # Containernet should also cleanup pending Docker
-        cmd =  "docker rm -f $( docker ps --filter 'label=com.containernet' -a -q)"
-        call(cmd, shell=True, stdout=open(os.devnull, 'wb'),  stderr=open(os.devnull, 'wb'))
+        # cmd =  "docker rm -f $( docker ps --filter 'label=com.containernet' -a -q)"
+        # call(cmd, shell=True, stdout=open(os.devnull, 'wb'),  stderr=open(os.devnull, 'wb'))
 
         # cleanup any remaining iptables rules from external SAPs with NAT
         # we use iptc module to iterate through the loops, but due to a bug, we cannot use iptc to delete the rules
